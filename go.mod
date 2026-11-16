@@ -2,7 +2,7 @@ module cotw-app
 
 go 1.27.4
 
-replace cotw-pop-viewer => "C:/Users/jacob/Cotw Save Reader"
+replace cotw-pop-viewer => ./cotw-pop-viewer
 
 require (
 	cotw-pop-viewer v0.0.0-00010101000000-000000000000
