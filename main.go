@@ -66,5 +66,27 @@ func main() {
 		uiOptions.speciesName = selectedReserveSpecies[promptSpeciesResult]
 	}
 
+	var promptShowArrowsResult bool
+	var promptShowArrowsResultInt int
+	if uiOptions.showSpecificSpecies {
+		promptArrows := &survey.Select{
+			Message: "Show Group Movement Arrows",
+			Options: []string{"No", "Yes"},
+		}
+		err := survey.AskOne(promptArrows, &promptShowArrowsResultInt)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		promptShowArrowsResult = false
+		if promptShowArrowsResultInt == 1 {
+			fmt.Println("Showing group movement arrows")
+			promptShowArrowsResult = true
+		}
+	} else {
+		promptShowArrowsResult = false
+	}
+	uiOptions.showGroupArrows = promptShowArrowsResult
+
 	runEBitEn(selectedReserve, save, uiOptions)
 }

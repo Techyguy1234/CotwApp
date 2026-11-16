@@ -3,11 +3,13 @@ package main
 import (
 	cotw "cotw-pop-viewer"
 	"fmt"
+	"image/color"
 	_ "image/jpeg"
 	_ "image/png"
 	"log"
 	"strconv"
 
+	"github.com/hajimehoshi/ebiten/v2/vector"
 	_ "golang.org/x/image/webp"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -69,7 +71,6 @@ func (g *Game) Update() error {
 func (g *Game) Draw(screen *ebiten.Image) {
 	camMatrix := g.camera.Matrix()
 	op := &ebiten.DrawImageOptions{}
-	//op.GeoM.Scale(0.4, 0.4)
 	op.GeoM.Concat(camMatrix)
 	screen.DrawImage(g.reserveImg, op)
 
@@ -95,6 +96,9 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		screen.DrawImage(zone.image, op2)
 
 	}
+
+	drawArrowBetweenMapPoints(camMatrix, g.zonesTransform, vec2{0, 0}, vec2{-6000, 4000}, screen)
+
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
@@ -148,24 +152,37 @@ func runEBitEn(reserve int, save *cotw.Save, mode uiMode) {
 			break
 		}
 	}
-	//zone := needZoneIcon{}
-	//zone.positionX = -4636.700
-	//zone.positionY = 12596.158
-	//zone.id = 2345
-	//zone.zoneType = 0
-	//zone.image, _, _ = ebitenutil.NewImageFromFile("Images/Icons/Unknown.png")
-	//needZones = append(needZones, zone)
-	//zone = needZoneIcon{}
-	//zone.positionX = -4463.089
-	//zone.positionY = 10971.438
-	//zone.id = 2346
-	//zone.zoneType = 0
-	//zone.image, _, _ = ebitenutil.NewImageFromFile("Images/Icons/Unknown.png")
-	//needZones = append(needZones, zone)
 
 	ebiten.SetWindowSize(1280, 720)
-	ebiten.SetWindowTitle("Hello, World!")
+
+	//Window Title
+	windowTitle := ""
+	if mode.showSpecificSpecies == false {
+		windowTitle = "All Species on " + save.Reserves[reserve].Name
+	} else {
+		windowTitle = "Showing " + mode.speciesName + " on " + save.Reserves[reserve].Name
+	}
+	ebiten.SetWindowTitle(windowTitle)
+
 	if err := ebiten.RunGame(&Game{reserveImg: bgImg, camera: NewCamera(), zones: &needZones, zonesTransform: getOffset(reserve), displayOptions: mode}); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func drawArrowBetweenMapPoints(cameraGeoM ebiten.GeoM, zonesGeoM ebiten.GeoM, mapStart vec2, mapFinish vec2, screen *ebiten.Image) {
+	mapSpacePath := vector.Path{}
+	mapSpacePath.MoveTo(float32(mapStart.x), float32(mapStart.y))
+	mapSpacePath.LineTo(float32(mapFinish.x), float32(mapFinish.y))
+
+	combinedGeoM := zonesGeoM
+	combinedGeoM.Concat(cameraGeoM)
+
+	pixelSpacePath := vector.Path{}
+	pixelSpacePath.AddPath(&mapSpacePath, &vector.AddPathOptions{GeoM: combinedGeoM})
+
+	strokeOp := &vector.StrokeOptions{Width: 1}
+	drawOp := &vector.DrawPathOptions{AntiAlias: true}
+	drawOp.ColorScale.ScaleWithColor(color.RGBA{R: 255, G: 127, B: 80, A: 255})
+
+	vector.StrokePath(screen, &pixelSpacePath, strokeOp, drawOp)
 }
