@@ -14,7 +14,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 )
 
-type needZone struct {
+type needZoneIcon struct {
 	image     *ebiten.Image
 	zoneType  int
 	positionX float64
@@ -56,7 +56,7 @@ var reserveImages = []string{
 type Game struct {
 	reserveImg     *ebiten.Image
 	camera         *Camera
-	zones          *[]needZone
+	zones          *[]needZoneIcon
 	zonesTransform ebiten.GeoM
 	displayOptions uiMode
 }
@@ -109,7 +109,7 @@ func runEBitEn(reserve int, save *cotw.Save, mode uiMode) {
 		log.Fatal(err)
 	}
 	fmt.Println("Loading " + strconv.FormatInt(int64(len(save.Zones(reserve))), 10) + " need zones")
-	var needZones []needZone
+	var needZones []needZoneIcon
 
 	feedImage, _, err := ebitenutil.NewImageFromFile("Images/Icons/FeedingZoneIcon.webp")
 	if err != nil {
@@ -125,7 +125,7 @@ func runEBitEn(reserve int, save *cotw.Save, mode uiMode) {
 	}
 
 	for i, savedZone := range save.Zones(reserve) {
-		zone := needZone{}
+		zone := needZoneIcon{}
 		zone.positionX = savedZone.Position.X
 		zone.positionY = savedZone.Position.Z
 		zone.id = int(savedZone.ID)
@@ -148,14 +148,14 @@ func runEBitEn(reserve int, save *cotw.Save, mode uiMode) {
 			break
 		}
 	}
-	//zone := needZone{}
+	//zone := needZoneIcon{}
 	//zone.positionX = -4636.700
 	//zone.positionY = 12596.158
 	//zone.id = 2345
 	//zone.zoneType = 0
 	//zone.image, _, _ = ebitenutil.NewImageFromFile("Images/Icons/Unknown.png")
 	//needZones = append(needZones, zone)
-	//zone = needZone{}
+	//zone = needZoneIcon{}
 	//zone.positionX = -4463.089
 	//zone.positionY = 10971.438
 	//zone.id = 2346
