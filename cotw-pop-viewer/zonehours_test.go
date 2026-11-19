@@ -104,15 +104,23 @@ func TestHourStoreRoundTrip(t *testing.T) {
 	}
 }
 
-// TestTimetablePrecedence checks the source order for slot windows: options,
-// then this save, then an earlier save, then the published table.
+// TestTimetablePrecedence checks the source order for slot windows: overrides,
+// then this reserve's own discoveries, then what an earlier parse learned for
+// the reserve, then the published page for the reserve, and only then the
+// species-wide fallbacks.
 func TestTimetablePrecedence(t *testing.T) {
 	store := newHourStore("v1")
 	store.learn("layton_lake_district", "moose", []ScheduleSlot{
 		{Index: 0, Type: 3, Start: 0, End: 4},
-		{Index: 1, Type: 1, Start: 4, End: 8},
+		{Index: 1, Type: 1, Start: 5, End: 9},
 	})
+	// A species-wide entry that must NOT leak into another reserve's schedule.
 	store.Species["moose"] = copySlots(store.Reserves["layton_lake_district"]["moose"])
+	// A species no page covers, learned on one reserve.
+	store.learn("layton_lake_district", "american_mink", []ScheduleSlot{
+		{Index: 0, Type: 3, Start: 4, End: 8},
+	})
+	store.Species["american_mink"] = copySlots(store.Reserves["layton_lake_district"]["american_mink"])
 
 	res := &hourResolver{
 		evidence: scheduleEvidence{
@@ -124,17 +132,28 @@ func TestTimetablePrecedence(t *testing.T) {
 		learned: store,
 	}
 
-	// This save's own discovery wins for its reserve, slot by slot.
+	// This reserve's own discovery wins for its reserve, slot by slot.
 	w, ok := tableAt(res.timetable("yukon", "moose"), 0)
 	if !ok || w.start != 2 || w.source != HourSourceSave {
 		t.Fatalf("reserve evidence: %+v %v", w, ok)
 	}
-	// The species-wide learned entry covers a reserve with no evidence of its own.
-	w, ok = tableAt(res.timetable("hirschfelden", "moose"), 1)
-	if !ok || w.start != 4 || w.source != HourSourceLearned {
-		t.Fatalf("learned species entry: %+v %v", w, ok)
+	// An earlier parse's entry for the reserve beats the published page.
+	w, ok = tableAt(res.timetable("layton_lake_district", "moose"), 1)
+	if !ok || w.start != 5 || w.source != HourSourceLearned {
+		t.Fatalf("reserve store: %+v %v", w, ok)
 	}
-	// The published table fills a species neither the save nor the store covers.
+	// The page for a reserve the store did not learn beats the species-wide entry:
+	// moose on Hirschfelden is the published 04:00-08:00, not Layton's 05:00-09:00.
+	w, ok = tableAt(res.timetable("hirschfelden", "moose"), 1)
+	if !ok || w.start != 4 || w.source != HourSourceWiki {
+		t.Fatalf("page over species-wide store: %+v %v", w, ok)
+	}
+	// The species-wide store still covers a species no page lists.
+	w, ok = tableAt(res.timetable("hirschfelden", "american_mink"), 0)
+	if !ok || w.start != 4 || w.source != HourSourceLearned {
+		t.Fatalf("species-wide store for a page-less species: %+v %v", w, ok)
+	}
+	// The published page fills a species neither the save nor the store covers.
 	w, ok = tableAt(res.timetable("hirschfelden", "snow_leopard"), 1)
 	if !ok || w.source != HourSourceWiki {
 		t.Fatalf("published fallback: %+v %v", w, ok)

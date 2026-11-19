@@ -252,6 +252,12 @@ type ScheduleSlot struct {
 	End   float64 `json:"end_hour"`
 }
 
+// String renders the slot the way the community zone-time pages print it:
+// "10:00-13:00 feeding".
+func (s ScheduleSlot) String() string {
+	return hourText(s.Start) + "-" + hourText(s.End) + " " + ZoneTypeName(s.Type)
+}
+
 // SpeciesSchedule is the daily need-zone schedule of one species.
 //
 // The schedule belongs to the species, not to a single zone: every zone the

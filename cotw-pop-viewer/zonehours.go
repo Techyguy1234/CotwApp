@@ -2,6 +2,7 @@ package cotw
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -12,6 +13,23 @@ import (
 type HourWindow struct {
 	Start float64 `json:"start_hour"`
 	End   float64 `json:"end_hour"`
+}
+
+// String renders the window the way the community zone-time pages print it,
+// with midnight as 00:00 rather than 24.
+func (w HourWindow) String() string {
+	return hourText(w.Start) + "-" + hourText(w.End)
+}
+
+// hourText renders one game hour as HH:MM. An hour of 24 is midnight at the end
+// of the day, which the pages write as 00:00.
+func hourText(h float64) string {
+	if h <= 0 || h >= 24 {
+		return "00:00"
+	}
+	hour := int(h)
+	minute := int((h - float64(hour)) * 60)
+	return fmt.Sprintf("%02d:%02d", hour, minute)
 }
 
 // Where a zone's window came from.
@@ -207,9 +225,8 @@ func newHourStore(gameVersion string) *hourStore {
 	}
 }
 
-// hours returns the stored timetable for a reserve/species pair, falling back
-// to the species-wide timetable learned elsewhere.
-func (h *hourStore) hours(reserveKey, speciesKey string) ([]ScheduleSlot, bool) {
+// reserveHours returns the timetable an earlier parse learned for one reserve.
+func (h *hourStore) reserveHours(reserveKey, speciesKey string) ([]ScheduleSlot, bool) {
 	if h == nil {
 		return nil, false
 	}
@@ -218,18 +235,35 @@ func (h *hourStore) hours(reserveKey, speciesKey string) ([]ScheduleSlot, bool) 
 			return slots, true
 		}
 	}
+	return nil, false
+}
+
+// speciesHours returns the species-wide timetable learned from earlier saves,
+// but only while no reserve that revealed the species disagrees with it: some
+// species keep different hours on different reserves.
+func (h *hourStore) speciesHours(reserveKey, speciesKey string) ([]ScheduleSlot, bool) {
+	if h == nil {
+		return nil, false
+	}
 	slots, ok := h.Species[speciesKey]
 	if !ok || len(slots) == 0 {
 		return nil, false
 	}
-	// Trust the species-wide entry only while no reserve contradicts it: some
-	// species keep different hours on different reserves.
 	for _, bySpecies := range h.Reserves {
 		if other, ok := bySpecies[speciesKey]; ok && !sameSlots(other, slots) {
 			return nil, false
 		}
 	}
 	return slots, true
+}
+
+// hours returns the best stored timetable for a reserve/species pair: the
+// reserve's own entry, else the species-wide one.
+func (h *hourStore) hours(reserveKey, speciesKey string) ([]ScheduleSlot, bool) {
+	if slots, ok := h.reserveHours(reserveKey, speciesKey); ok {
+		return slots, true
+	}
+	return h.speciesHours(reserveKey, speciesKey)
 }
 
 // learn records what a save revealed about one reserve. It reports whether
@@ -432,9 +466,17 @@ woolly_hare|1:0-4,1:4-7,3:7-11,3:11-14,3:14-17,1:17-20,1:20-24
 @nh|coyote|2:0-3,1:3-7,3:7-10,3:10-14,3:14-17,1:17-20,1:20-24
 @nz|feral_goat|3:0-3,3:3-6,1:6-9,1:9-12,3:12-15,2:15-18,1:18-21,3:21-24
 @nz|feral_pig|3:0-3,2:3-6,1:6-10,3:10-14,1:14-17,1:17-20,3:20-24
+@delta|feral_pig|3:0-3,2:3-6,1:6-10,3:10-14,1:14-17,1:17-20,3:20-24
 @yukon|gray_wolf|2:0-3,1:3-6,3:6-10,3:10-14,3:14-18,1:18-21,1:21-24
 @mexico|mule_deer|1:0-4,1:4-7,3:7-11,3:11-14,2:14-17,3:17-20,1:20-24
 @nh|raccoon|1:0-3,2:3-6,3:6-10,1:10-13,3:13-16,3:16-20,1:20-24
+@rockies|puma|2:0-3,1:3-6,3:6-9,3:9-12,3:12-15,1:15-18,3:18-21,1:21-24
 @delta|whitetail_deer|3:0-4,1:4-8,2:8-11,3:11-14,1:14-18,1:18-21,3:21-24
 @mexico|whitetail_deer|3:0-4,1:4-8,2:8-11,3:11-14,1:14-18,1:18-21,3:21-24
+#
+# Scotland has no page yet. Its fallow deer lay their schedule out with the
+# drinking slot before the feeding one around midday (the shipped geometry puts a
+# drinking zone at path position 2 and a feeding zone at 3 for every group of the
+# reserve), so the species' seven windows are typed to match:
+@scotland|fallow_deer|3:0-3,3:3-6,2:6-10,1:10-13,3:13-17,1:17-21,3:21-24
 `

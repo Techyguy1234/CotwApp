@@ -353,16 +353,19 @@ for _, sp := range reserve.Species {
 ```
 
 The window of each slot is resolved from the best source available, slot by
-slot, so a slot this save revealed keeps the window it recorded while a slot only
-the store or the published table covers is still filled in:
+slot. The order matters: a timetable is per reserve, so the reserve's own
+evidence and the page for that reserve come before anything species-wide -
+otherwise a variant discovered on one reserve (or the species-wide entry the
+learned store keeps) leaks into another reserve's schedule.
 
 | Order | Source | `HourSource` |
 |---|---|---|
 | 1 | `Options.ZoneHours` (key `species` or `reserve/species`) | `options` |
 | 2 | this reserve's discovered zones | `save` |
-| 3 | this save's discoveries on other reserves | `save` |
-| 4 | the learned store (earlier saves, same game version) | `learned` |
-| 5 | the published community table | `wiki` |
+| 3 | an earlier parse's entry for this reserve | `learned` |
+| 4 | the published page for this reserve (its variant, or the row it shows) | `wiki` |
+| 5 | this save's discoveries on other reserves, where every reserve agreed | `save` |
+| 6 | the learned store's species-wide entry, while no reserve contradicts it | `learned` |
 | — | nothing known | `slot` is `-1`, no window |
 
 `Save.Timetable(reserve, species)` returns that merged table directly, and
@@ -388,22 +391,31 @@ changed the timetable.
 
 **Published fallback.** `zonehours.go` carries a transcribed table covering 100
 of the 130 species, from the community zone-times pages
-(`thehuntercotw.wordpress.com`, 15 reserve pages, fetched 2026-11-13). Its slot
-numbering was verified against discovered zones: a slot's index is its rank by
-start hour (164/169 exact), and 157 of 158 comparable discovered windows agree
-with the page for their reserve. It is a fallback only — anything the save or an
-earlier save revealed wins. `PublishedZoneHours(key)` and
-`PublishedZoneHoursFor(reserve, key)` expose it directly.
+(`thehuntercotw.wordpress.com`, 15 reserve pages, fetched 2026-11-19). A page is
+the timetable *for that reserve*, so where a page differs the table keeps a
+reserve-specific variant, and every species a page lists is checked against it:
+the resolved timetable for 112 of 112 (reserve, species) pairs this save has on
+a paged reserve is exactly the page's windows (see
+`TestPublishedHoursMatchEveryPage`). Its slot numbering was verified against
+discovered zones: a slot's index is its rank by start hour (164/169 exact), and
+157 of 158 comparable discovered windows agree with the page for their reserve.
+`PublishedZoneHours(key)` and `PublishedZoneHoursFor(reserve, key)` expose it
+directly.
 
-The three species whose pages order their slots differently (puma, fallow deer
-and feral pig pages) are caught by the geometry check above: the timetable is
-then assigned by activity type rather than by position, so each zone still gets
-a window of its own type. On a real save 61,959 of 65,518 zone records get a
-window (14,477 from the save, 47,482 from the published table); the 3,559
-without one are species the table does not cover (mink, pine marten, red grouse,
-badger, woodcock, desert bighorn, woodland caribou) plus zone types a species
-genuinely lacks (snow leopard has no drinking zones, European rabbit no resting
-zones).
+Reserves with no page yet (Scotland, Alberta, Peru) fall back to the species rows
+the pages give elsewhere. Scotland's fallow deer is carried as a variant typed to
+the shipped geometry, which puts a drinking zone before the midday feeding zone
+there.
+
+Where a page's slot order still disagrees with the shipped geometry - the types
+the game actually places at each path position - the zone's own activity decides:
+the timetable is then assigned by activity type rather than by position, so each
+zone still gets a window of its type. That check is also what catches a
+transcription slip. On a real save 61,998 of 65,518 zone records get a window
+(7,336 from this save, 54,662 from the published table); the 3,520 without one
+are species no page covers (mink, pine marten, red grouse, badger, woodcock,
+desert bighorn, woodland caribou) plus zone types a species genuinely lacks
+(snow leopard has no drinking zones, European rabbit no resting zones).
 
 ## Format notes worth knowing
 

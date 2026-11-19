@@ -40,11 +40,12 @@ type slotWindow struct {
 // timetable returns a species' daily timetable on a reserve as one entry per
 // slot, keyed by slot index.
 //
-// Sources are merged slot by slot, most specific first, because the save only
-// reveals the slots whose zones the player has found while the published table
-// covers a whole species: a slot this reserve's discoveries revealed keeps their
-// exact window, and a slot only the store or the published table covers is still
-// filled in.
+// Sources are merged slot by slot, most specific first. The ordering matters:
+// this reserve's own discoveries and the published page for *this reserve* come
+// before anything species-wide, because a timetable is per reserve and
+// species-wide agreement (the store's species entry, or discoveries on other
+// reserves) would otherwise leak one reserve's variant into another - that is
+// how Delta's raccoon picked up the New England variant.
 func (r *hourResolver) timetable(reserveKey, speciesKey string) []slotWindow {
 	bySlot := map[int8]slotWindow{}
 	add := func(slots []ScheduleSlot, source string) {
@@ -55,22 +56,32 @@ func (r *hourResolver) timetable(reserveKey, speciesKey string) []slotWindow {
 			bySlot[sl.Index] = slotWindow{slot: sl.Index, typ: sl.Type, start: sl.Start, end: sl.End, source: source}
 		}
 	}
+	// An explicit override names the windows it wants.
 	if slots, ok := slotsForKey(r.options, reserveKey, speciesKey); ok {
 		add(numberedCopy(slots), HourSourceOptions)
 	}
+	// This reserve's own discoveries: exact for the slots they cover.
 	if bySpecies, ok := r.evidence.byReserve[reserveKey]; ok {
 		if slots, ok := bySpecies[speciesKey]; ok {
 			add(slots, HourSourceSave)
 		}
 	}
+	// An earlier parse's discoveries on this reserve.
+	if slots, ok := r.learned.reserveHours(reserveKey, speciesKey); ok {
+		add(slots, HourSourceLearned)
+	}
+	// The published page for this reserve: its own variant, or the row the page
+	// shows for it.
+	if slots, ok := PublishedZoneHoursFor(reserveKey, speciesKey); ok {
+		add(slots, HourSourceWiki)
+	}
+	// Only now the species-wide fallbacks, for slots no reserve-specific source
+	// covers: discoveries every revealing reserve agreed on, then the store.
 	if slots, ok := r.evidence.bySpecies[speciesKey]; ok {
 		add(slots, HourSourceSave)
 	}
-	if slots, ok := r.learned.hours(reserveKey, speciesKey); ok {
+	if slots, ok := r.learned.speciesHours(reserveKey, speciesKey); ok {
 		add(slots, HourSourceLearned)
-	}
-	if slots, ok := PublishedZoneHoursFor(reserveKey, speciesKey); ok {
-		add(slots, HourSourceWiki)
 	}
 	out := make([]slotWindow, 0, len(bySlot))
 	for _, w := range bySlot {
