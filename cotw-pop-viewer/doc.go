@@ -19,6 +19,38 @@
 //
 // ParseSave reads only. It never writes to a save file.
 //
+// # Live game
+//
+// The same game data also describes a running game. OpenLive opens a read-only
+// handle on theHunterCotW_F.exe (no writes, no injection) and Status reports
+// whether the game is running and which reserve the player is on:
+//
+//	live, err := game.OpenLive()
+//	if errors.Is(err, cotw.ErrGameNotRunning) {
+//		return err
+//	}
+//	defer live.Close()
+//	st, _ := live.Status()
+//	if st.InReserve {
+//		fmt.Println("playing", st.ReserveName)
+//	}
+//
+// Reading animals live is Positions:
+//
+//	animals, err := live.Positions()
+//	if errors.Is(err, cotw.ErrNotInReserve) {
+//		return err
+//	}
+//	for _, a := range animals {
+//		fmt.Println(a.SpeciesName, a.Gender, a.Tier, a.Position, a.Score)
+//	}
+//
+// Positions returns every animal of the loaded reserve with its current world
+// position, weight, score and trophy tier, read from the game's materialised
+// animal entities. The positions are live, moving as the animals travel
+// between need zones, and species, gender and tier come from each animal's
+// visual variation seed matched against the save.
+//
 // # Save files
 //
 // One save folder holds animal_population_0..N (one per reserve), and usually
