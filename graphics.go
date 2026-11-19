@@ -25,6 +25,11 @@ type needZoneIcon struct {
 	species   string
 }
 
+type groupArrow struct {
+	startXY vec2
+	endXY   vec2
+}
+
 type uiMode struct {
 	showSpecificSpecies bool
 	speciesName         string
@@ -56,11 +61,12 @@ var reserveImages = []string{
 }
 
 type Game struct {
-	reserveImg     *ebiten.Image
-	camera         *Camera
-	zones          *[]needZoneIcon
-	zonesTransform ebiten.GeoM
-	displayOptions uiMode
+	reserveImg       *ebiten.Image
+	camera           *Camera
+	zones            *[]needZoneIcon
+	zonesTransform   ebiten.GeoM
+	displayOptions   uiMode
+	shownGroupArrows []groupArrow
 }
 
 func (g *Game) Update() error {
@@ -97,7 +103,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	}
 
-	drawArrowBetweenMapPoints(camMatrix, g.zonesTransform, vec2{0, 0}, vec2{-6000, 4000}, screen)
+	drawArrowBetweenMapPoints(camMatrix, g.zonesTransform, g.shownGroupArrows[0].startXY, g.shownGroupArrows[0].endXY, screen)
 
 }
 
@@ -153,6 +159,12 @@ func runEBitEn(reserve int, save *cotw.Save, mode uiMode) {
 		}
 	}
 
+	//Group arrows
+	groupArrowList := []groupArrow{}
+	position1 := save.Reserves[reserve].Species[0].Groups[0].NeedZones[0].Position
+	position2 := save.Reserves[reserve].Species[0].Groups[0].NeedZones[1].Position
+	groupArrowList = append(groupArrowList, groupArrow{vec2{position1.X, position1.Z}, vec2{position2.X, position2.Z}})
+
 	ebiten.SetWindowSize(1280, 720)
 
 	//Window Title
@@ -164,7 +176,7 @@ func runEBitEn(reserve int, save *cotw.Save, mode uiMode) {
 	}
 	ebiten.SetWindowTitle(windowTitle)
 
-	if err := ebiten.RunGame(&Game{reserveImg: bgImg, camera: NewCamera(), zones: &needZones, zonesTransform: getOffset(reserve), displayOptions: mode}); err != nil {
+	if err := ebiten.RunGame(&Game{reserveImg: bgImg, camera: NewCamera(), zones: &needZones, zonesTransform: getOffset(reserve), displayOptions: mode, shownGroupArrows: groupArrowList}); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -173,8 +185,10 @@ func drawArrowBetweenMapPoints(cameraGeoM ebiten.GeoM, zonesGeoM ebiten.GeoM, ma
 	mapSpacePath := vector.Path{}
 	mapSpacePath.MoveTo(float32(mapStart.x), float32(mapStart.y))
 	mapSpacePath.LineTo(float32(mapFinish.x), float32(mapFinish.y))
+	//mapSpacePath.LineTo(-float32(mapStart.y), float32(mapStart.x))
 
-	combinedGeoM := zonesGeoM
+	combinedGeoM := ebiten.GeoM{}
+	combinedGeoM.Concat(zonesGeoM)
 	combinedGeoM.Concat(cameraGeoM)
 
 	pixelSpacePath := vector.Path{}
@@ -182,7 +196,7 @@ func drawArrowBetweenMapPoints(cameraGeoM ebiten.GeoM, zonesGeoM ebiten.GeoM, ma
 
 	strokeOp := &vector.StrokeOptions{Width: 1}
 	drawOp := &vector.DrawPathOptions{AntiAlias: true}
-	drawOp.ColorScale.ScaleWithColor(color.RGBA{R: 255, G: 127, B: 80, A: 255})
+	drawOp.ColorScale.ScaleWithColor(color.RGBA{R: 255, G: 0, B: 0, A: 255})
 
 	vector.StrokePath(screen, &pixelSpacePath, strokeOp, drawOp)
 }

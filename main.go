@@ -13,6 +13,7 @@ var save *cotw.Save
 var err error
 
 func main() {
+	fmt.Println("Starting... (This may take a few minutes on the first time.)")
 	save, err = cotw.ParseSave("", cotw.Options{})
 	if err != nil {
 		panic(err)
@@ -21,12 +22,12 @@ func main() {
 	uiOptions := uiMode{}
 
 	reserveList := []string{}
-	reserveListIndicies := []int{}
+	reserveListIndices := []int{}
 
 	for i := range save.Reserves {
 		if save.Reserves[i].TotalAnimals != 0 {
 			reserveList = append(reserveList, save.Reserves[i].Name+": "+strconv.FormatInt(int64(save.Reserves[i].TotalAnimals), 10)+" (Index: "+strconv.FormatInt(int64(save.Reserves[i].Index), 10)+")")
-			reserveListIndicies = append(reserveListIndicies, i)
+			reserveListIndices = append(reserveListIndices, i)
 		}
 	}
 
@@ -39,7 +40,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	selectedReserve := reserveListIndicies[promptReserveResult]
+	selectedReserve := reserveListIndices[promptReserveResult]
 
 	selectedReserveSpecies := []string{}
 	for i := range save.Reserves[selectedReserve].Species {
