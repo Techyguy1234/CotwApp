@@ -99,8 +99,10 @@ type Group struct {
 	Index       int    `json:"index"`
 	SpawnAreaID int32  `json:"spawn_area_id"`
 	ID          uint32 `json:"id"`
-	// NeedZoneGuids are the ids of the zones this group uses. They include
-	// zones the player has not discovered yet.
+	// NeedZoneGuids are the ids of the zones this group uses, ordered by the
+	// schedule slot the group is in: entry i is the zone used during slot i of
+	// the species' daily timetable (see GroupSlot). They include zones the
+	// player has not discovered yet.
 	NeedZoneGuids []uint32  `json:"need_zone_guids"`
 	Animals       []*Animal `json:"animals"`
 	// NeedZones are the zones this group uses, ordered by id. The player has
@@ -108,10 +110,62 @@ type Group struct {
 	// found_need_zones_adf); the rest are filled in from the shipped geometry so
 	// a group's zone list is complete either way.
 	NeedZones []*NeedZone `json:"need_zones,omitempty"`
+	// Slots is the group's daily timetable: one entry per schedule slot, in slot
+	// order, naming the zone the group uses during that window. This is the
+	// per-group answer to "where is this herd at what time" - each zone appears
+	// here at exactly the slot its group uses it at, not at every window of its
+	// activity type. Slots is nil for a group whose path is empty.
+	Slots []GroupSlot `json:"slots,omitempty"`
 	// SpawnArea is the centre and extent of this group's spawn area, from the
 	// geometry the game ships for SpawnAreaID (see zones.go). Nil when the id
 	// is not in the shipped spawn bitmaps.
 	SpawnArea *ZoneGeometry `json:"spawn_area,omitempty"`
+}
+
+// GroupSlot is one slot of a group's daily timetable: the need zone the group
+// uses during that window.
+//
+// A group's zone path (NeedZoneGuids) lists one zone per slot of its species'
+// timetable, in slot order, and that order is the game's own slot order. It is
+// verifiable in a save without the engine: for every zone that only one group
+// uses and uses once, the NeedZoneScheduleIndex the save recorded for it equals
+// the position it occupies in that group's path (94 of 94 on the reference
+// save), and the shipped geometry type of the zone at each path position matches
+// the timetable's activity type for that slot (104,270 of 104,270 group
+// entries).
+//
+// So a zone is used at the slot it occupies in its group's path - not at every
+// window of its type. The window itself comes from the species timetable
+// (zonehours.go); HourSource says which source supplied it.
+type GroupSlot struct {
+	// Slot is the index into the species' daily timetable, or -1 when no source
+	// could place this zone in the timetable (the group still uses the zone, but
+	// its window is unknown).
+	Slot int8 `json:"slot"`
+	// ZoneID is the zone the group uses during this slot (EmptyZoneID when the
+	// path has no zone for it).
+	ZoneID uint32 `json:"zone_id"`
+	// Type is the zone's activity (1 feeding, 2 drinking, 3 resting), from the
+	// shipped geometry the game stores for the zone id. Zero when the id is not
+	// in the shipped layout.
+	Type int32 `json:"type"`
+	// Discovered reports whether the player has found this zone.
+	Discovered bool `json:"discovered"`
+	// HasWindow is false when no source could supply this slot's window.
+	HasWindow bool `json:"has_window"`
+	// StartHour and EndHour are the slot's window in game hours (0..24).
+	StartHour float64 `json:"start_hour"`
+	EndHour   float64 `json:"end_hour"`
+	// HourSource names where the window came from (see the HourSource
+	// constants in zonehours.go).
+	HourSource string `json:"hour_source,omitempty"`
+	// RecordedStartHour and RecordedEndHour are the window the save stored for a
+	// discovered zone. The engine writes the window of the slot during which
+	// the player found the zone, which is the slot of the group that discovered
+	// it, so for a zone several groups share these can differ from the window of
+	// the slot this group uses it at.
+	RecordedStartHour float64 `json:"recorded_start_hour,omitempty"`
+	RecordedEndHour   float64 `json:"recorded_end_hour,omitempty"`
 }
 
 // Animal is one animal in a group.
@@ -182,8 +236,9 @@ type NeedZone struct {
 	MapIconID  uint64  `json:"map_icon_id"`
 	StartHour  float64 `json:"start_hour"`
 	EndHour    float64 `json:"end_hour"`
-	// Windows lists every window of this zone's type, the same way ZoneInfo
-	// does; StartHour/EndHour are only set when there is exactly one.
+	// Windows lists the window this zone is used in, the same way ZoneInfo
+	// does: one entry for the slot the zone occupies in its group's path. It is
+	// empty when no source could supply that slot's window.
 	Windows []HourWindow `json:"windows,omitempty"`
 	// HourSource records where the window came from (see HourSource* constants).
 	HourSource string `json:"hour_source,omitempty"`

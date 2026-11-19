@@ -115,6 +115,10 @@ func ParseSave(dir string, opts Options) (*Save, error) {
 	// Complete every group's zone list with the zones the player has not found.
 	fillGroupNeedZones(save)
 
+	// Give every group its daily timetable: one slot per zone path entry, each
+	// with the window of that slot.
+	save.assignGroupSlots()
+
 	// Keep what this save revealed so later parses need fewer discoveries.
 	save.learnZoneHours()
 

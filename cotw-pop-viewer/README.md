@@ -59,10 +59,24 @@ type SpeciesPopulation struct {
 
 type Group struct {
     Index int; SpawnAreaID int32; ID uint32
-    NeedZoneGuids []uint32   // every zone id the group uses (discovered or not)
+    NeedZoneGuids []uint32   // one zone per schedule slot, in slot order
     Animals       []*Animal
-    NeedZones     []*NeedZone // the ids that resolved to a discovered zone
+    NeedZones     []*NeedZone // the ids that resolved to a zone entry
+    Slots         []GroupSlot // the group's day: slot -> zone + window
     SpawnArea     *ZoneGeometry // centre/extent of the group's spawn area
+}
+
+type GroupSlot struct {
+    Slot         int8     // index into the species timetable (-1: unplaced)
+    ZoneID       uint32
+    Type         int32    // 1 feeding, 2 drinking, 3 resting
+    Discovered   bool
+    HasWindow    bool
+    StartHour, EndHour float64
+    HourSource   string   // options | save | learned | wiki
+    // the window the save stored for a discovered zone, which names the slot
+    // of the group that discovered it, not necessarily this slot
+    RecordedStartHour, RecordedEndHour float64
 }
 
 type Animal struct {
@@ -83,9 +97,11 @@ type NeedZone struct {
     Position Vec3            // world metres; Y is elevation
     MapIconID uint64
     StartHour, EndHour float64
+    Windows []HourWindow     // the window of the slot this group uses it at
+    HourSource string        // options | save | learned | wiki
     AnimalTypeHash uint32
     AnimalSpeciesKey, AnimalSpeciesName string
-    ScheduleIndex int8
+    ScheduleIndex int8       // the slot in this group's path
     DiscoveredGroups []uint32
     Groups []GroupRef        // groups that use this zone
 }
@@ -275,8 +291,8 @@ Two things worth knowing:
 - **A group's `NeedZones` is complete.** Every id in `NeedZoneGuids` gets an
   entry: the discovered ones come from `found_need_zones_adf` with
   `Discovered=true`, the rest are filled from the shipped geometry
-  (`Discovered=false`) with the type, position and whatever timetable the
-  library could resolve. So
+  (`Discovered=false`) with the type, position and the window of the slot the
+  group uses the zone at. So
   `save.Reserves[i].Species[j].Groups[k].NeedZones` prints a real list even on a
   reserve you have never scouted, and both `NeedZone` and `ZoneInfo` render
   themselves for `fmt`.
@@ -284,9 +300,8 @@ Two things worth knowing:
   than one reserve's layout at genuinely different places. `save.Zones` resolves
   those by picking the candidate nearest the spawn areas of the groups that use
   the zone; `game.ZoneCandidates(id)` exposes all of them.
-- **Hours for an undiscovered zone** come from the species timetable; see
-  "Need zone hours" below for where that comes from, because the game does not
-  ship it.
+- **Which zone is used when** is `Group.Slots`; see "Need zone hours" below for
+  where the windows come from, because the game does not ship them.
 
 The geometry does not live in the JSON cache — it is far too large — but in a
 compact binary sidecar next to it (`gamedata.json.zones`, 32 bytes per record),
@@ -302,8 +317,44 @@ The engine owns the windows and writes them into a save *when a zone is
 discovered* (`NeedZoneStartTimeHours`, `NeedZoneEndTimeHours`,
 `NeedZoneScheduleIndex`).
 
-So the library resolves each zone's window from the best source it has, in this
-order:
+### Which zone a group is at, and when
+
+A zone is **not** active at every window of its activity type. A group has one
+zone per slot of its species' timetable and is at that zone during that slot, so
+three resting zones of one herd belong to three different rest periods, exactly
+as the community pages describe.
+
+The slot order is the order of the group's zone path. `NeedZoneGuids` lists the
+group's zones **in slot order**: entry *i* is the zone used during slot *i*. That
+is verifiable on a real save without the engine:
+
+- for every zone only one group uses, the `NeedZoneScheduleIndex` the save
+  recorded for it equals the position it occupies in that group's path
+  (94 of 94 on the reference save);
+- for every group, the activity type the shipped geometry gives the zone at each
+  position equals the species timetable's type at that position (104,270 of
+  104,270 group entries).
+
+So a discovered zone's recorded window names the slot of the group that
+discovered it, which for a zone several herds share (about a third of them) is
+not necessarily the slot another herd uses it at. `GroupSlot` therefore carries
+both: the slot's window and, for a discovered zone,
+`RecordedStartHour`/`RecordedEndHour`.
+
+```go
+for _, sp := range reserve.Species {
+    for _, g := range sp.Groups {
+        for _, s := range g.Slots {   // the group's day, in slot order
+            fmt.Printf("%s %02.0f:00-%02.0f:00 zone %d (%s)\n",
+                sp.SpeciesName, s.StartHour, s.EndHour, s.ZoneID, ZoneTypeName(s.Type))
+        }
+    }
+}
+```
+
+The window of each slot is resolved from the best source available, slot by
+slot, so a slot this save revealed keeps the window it recorded while a slot only
+the store or the published table covers is still filled in:
 
 | Order | Source | `HourSource` |
 |---|---|---|
@@ -312,13 +363,18 @@ order:
 | 3 | this save's discoveries on other reserves | `save` |
 | 4 | the learned store (earlier saves, same game version) | `learned` |
 | 5 | the published community table | `wiki` |
-| — | nothing known | `""` (empty `Windows`) |
+| — | nothing known | `slot` is `-1`, no window |
 
-A zone can have more than one window of its type (whitetail deer feeds twice).
-Then `ZoneInfo.Windows` carries every candidate and `StartHour`/`EndHour` stay
-zero, because which of those slots a given zone uses is only in the save once
-the zone is discovered. When exactly one window exists, `StartHour`/`EndHour`
-and `ScheduleIndex` are filled in too.
+`Save.Timetable(reserve, species)` returns that merged table directly, and
+`ZoneInfo.Slots` lists the slots a zone is used at (more than one for a shared
+zone).
+
+Where no timetable covers a slot at all (a species the published table does not
+cover, such as mink or woodcock, with no discovery to learn from), a discovered
+zone's slot keeps the window the save recorded for that zone: the best source
+there is, even though it names the slot the player found the zone in. On the
+reference save that leaves 7 of 29,785 (group, activity) pairs showing two zones
+at one window, all of them those species.
 
 **Learning.** Every parse records what the save revealed in
 `gamedata.json.hours` (beside the cache, not inside it: the cache comes from the
@@ -339,12 +395,15 @@ with the page for their reserve. It is a fallback only — anything the save or 
 earlier save revealed wins. `PublishedZoneHours(key)` and
 `PublishedZoneHoursFor(reserve, key)` expose it directly.
 
-On a real save this takes undiscovered-zone coverage from 60 of 211
-(species, type) pairs to 62,080 of 65,521 zone records (95%): 27,180 from the
-save, 34,900 from the published table. The 3,441 exceptions are species the
-table does not cover (mink, pine marten, red grouse, badger, woodcock, desert
-bighorn, woodland caribou) plus zone types a species genuinely lacks
-(snow leopard has no drinking zones, European rabbit no resting zones).
+The three species whose pages order their slots differently (puma, fallow deer
+and feral pig pages) are caught by the geometry check above: the timetable is
+then assigned by activity type rather than by position, so each zone still gets
+a window of its own type. On a real save 61,959 of 65,518 zone records get a
+window (14,477 from the save, 47,482 from the published table); the 3,559
+without one are species the table does not cover (mink, pine marten, red grouse,
+badger, woodcock, desert bighorn, woodland caribou) plus zone types a species
+genuinely lacks (snow leopard has no drinking zones, European rabbit no resting
+zones).
 
 ## Format notes worth knowing
 
@@ -381,6 +440,7 @@ needzones.go      need zone decoding and group linking
 reserves.go       file number → reserve key table
 zones.go          shipped zone/spawn-area geometry, candidate lookup
 zoneview.go       Save.Zones, timetables, zone -> reserve resolution
+groupslots.go     Save.Timetable, per-group slot assignment (Group.Slots)
 zonecache.go      binary geometry sidecar (gamedata.json.zones)
 zonehours.go      learned schedule store + published fallback table
 trophy.go         per-tier bools from species maximum ratings

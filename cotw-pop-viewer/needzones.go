@@ -195,14 +195,14 @@ func NeedZoneFileExists(dir string) bool {
 }
 
 // fillGroupNeedZones gives every group an entry for each zone it uses, including
-// the zones the player has not discovered. Those carry Discovered=false, take
-// their type and position from the shipped geometry, and their hours from
-// whatever timetable the library could resolve.
+// the zones the player has not discovered. Those carry Discovered=false and take
+// their type and position from the shipped geometry; their window is filled in
+// afterwards by assignGroupSlots, which knows which schedule slot the group uses
+// each zone at (see GroupSlot).
 func fillGroupNeedZones(save *Save) {
 	if save == nil || save.game == nil {
 		return
 	}
-	resolver := save.newHourResolver()
 	for _, r := range save.Reserves {
 		if len(r.Species) == 0 {
 			continue
@@ -244,31 +244,14 @@ func fillGroupNeedZones(save *Save) {
 					}
 					g.NeedZones = append(g.NeedZones, z)
 				}
-				// Hours for every entry: stored for a discovered zone, resolved
-				// from the timetables otherwise.
+				// A discovered zone keeps the window the save stored for it.
+				// Zones the player has not found get their window from the
+				// slot the group uses them at; assignGroupSlots does that once
+				// every group's zone list exists.
 				for _, z := range g.NeedZones {
-					if z.Discovered {
-						if z.EndHour != z.StartHour {
-							z.Windows = []HourWindow{{Start: z.StartHour, End: z.EndHour}}
-							z.HourSource = HourSourceSave
-						}
-						continue
-					}
-					if z.AnimalSpeciesKey == "" || z.Type == 0 {
-						continue
-					}
-					slots, source := resolver.windows(r.Key, z.AnimalSpeciesKey, z.Type)
-					if len(slots) == 0 {
-						continue
-					}
-					z.HourSource = source
-					z.Windows = make([]HourWindow, 0, len(slots))
-					for _, sl := range slots {
-						z.Windows = append(z.Windows, HourWindow{Start: sl.Start, End: sl.End})
-					}
-					if len(slots) == 1 {
-						z.ScheduleIndex = slots[0].Index
-						z.StartHour, z.EndHour = slots[0].Start, slots[0].End
+					if z.Discovered && z.EndHour != z.StartHour {
+						z.Windows = []HourWindow{{Start: z.StartHour, End: z.EndHour}}
+						z.HourSource = HourSourceSave
 					}
 				}
 				sort.Slice(g.NeedZones, func(i, j int) bool { return g.NeedZones[i].IDU < g.NeedZones[j].IDU })

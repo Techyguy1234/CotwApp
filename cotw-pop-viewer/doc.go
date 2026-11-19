@@ -51,6 +51,20 @@
 // between need zones, and species, gender and tier come from each animal's
 // visual variation seed matched against the save.
 //
+// # Need zone timetables
+//
+// A group's need zone path is ordered by the schedule slot the group is in:
+// Group.NeedZoneGuids[i] is the zone the group is at during slot i of its
+// species' daily timetable, and Group.Slots spells that out with the window of
+// each slot. A zone is therefore used at one slot, not at every window of its
+// activity type - three resting zones of one herd belong to three different
+// rest periods, which is what the community zone-time pages describe.
+//
+// The windows themselves are not shipped, so they come from the best source
+// that covers each slot in turn: Options.ZoneHours, this save's discoveries,
+// an earlier save's, then the published fallback table. Save.Timetable exposes
+// the merged result and GroupSlot.HourSource names the source per slot.
+//
 // # Save files
 //
 // One save folder holds animal_population_0..N (one per reserve), and usually

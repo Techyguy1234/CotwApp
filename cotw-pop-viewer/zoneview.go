@@ -68,16 +68,20 @@ type ZoneInfo struct {
 	Discovered bool `json:"discovered"`
 	// ScheduleIndex, StartHour and EndHour are the zone's daily window. For a
 	// discovered zone they are its stored values; for an undiscovered one they
-	// are derived from the species' schedule when that is unambiguous, and
+	// are set only when the slots that use the zone agree on one window, and
 	// left zero otherwise.
 	ScheduleIndex int8    `json:"schedule_index"`
 	StartHour     float64 `json:"start_hour"`
 	EndHour       float64 `json:"end_hour"`
-	// Windows lists every window of this zone's type. It has one entry when the
-	// window is unambiguous (StartHour/EndHour are then also set); a species
-	// with several zones of the same type has one window per such slot, and the
-	// zone's own slot cannot be told apart until it is discovered.
+	// Windows lists the distinct windows the zone is used in by the groups that
+	// reference it. Each entry is one group's slot, so a zone several groups
+	// share at different times of day has several; a zone is never listed at
+	// every window of its activity type (see GroupSlot).
 	Windows []HourWindow `json:"windows,omitempty"`
+	// Slots lists the timetable slots the zone occupies in the paths of the
+	// groups that use it, in increasing order. One entry for a zone one group
+	// uses once; more when the zone is shared.
+	Slots []int8 `json:"slots,omitempty"`
 	// HourSource says where the window came from: HourSourceSave,
 	// HourSourceOptions, HourSourceLearned, HourSourceWiki, or HourSourceNone.
 	HourSource string `json:"hour_source,omitempty"`
@@ -101,7 +105,6 @@ func (s *Save) Zones(reserveIndex int) []ZoneInfo {
 	if r == nil || s.game == nil {
 		return nil
 	}
-	resolver := s.newHourResolver()
 
 	byID := make(map[uint32]*ZoneInfo, 256)
 	order := make([]uint32, 0, 256)
@@ -120,9 +123,28 @@ func (s *Save) Zones(reserveIndex int) []ZoneInfo {
 	spawnX := map[uint32]float64{}
 	spawnZ := map[uint32]float64{}
 	spawnN := map[uint32]int{}
+	// uses collects the slots the groups use each zone at, which is what the
+	// zone's window comes from: a zone is used at the slot it occupies in a
+	// group's path, not at every window of its activity type.
+	uses := map[uint32][]zoneUse{}
+	slotSeen := map[uint32]map[int8]bool{}
 
 	for _, sp := range r.Species {
 		for _, g := range sp.Groups {
+			for _, gs := range g.Slots {
+				id := gs.ZoneID
+				if id == EmptyZoneID {
+					continue
+				}
+				if slotSeen[id] == nil {
+					slotSeen[id] = map[int8]bool{}
+				}
+				if !slotSeen[id][gs.Slot] {
+					slotSeen[id][gs.Slot] = true
+					uses[id] = append(uses[id], zoneUse{slot: gs.Slot, hasWindow: gs.HasWindow,
+						start: gs.StartHour, end: gs.EndHour, source: gs.HourSource})
+				}
+			}
 			for _, id := range g.NeedZoneGuids {
 				zi := get(id)
 				ref := GroupRef{SpeciesIndex: sp.Index, SpeciesKey: sp.SpeciesKey, GroupIndex: g.Index}
@@ -170,20 +192,20 @@ func (s *Save) Zones(reserveIndex int) []ZoneInfo {
 				zi.Type = geom.Type
 			}
 		}
-		// Fill an undiscovered zone's window from the best available timetable:
-		// this save's discoveries, then an earlier save's, then the published
-		// fallback (Options.ZoneHours overrides all three).
-		if !zi.Discovered && len(zi.Windows) == 0 && zi.SpeciesKey != "" {
-			if slots, source := resolver.windows(r.Key, zi.SpeciesKey, zi.Type); len(slots) > 0 {
-				zi.HourSource = source
-				zi.Windows = make([]HourWindow, 0, len(slots))
-				for _, sl := range slots {
-					zi.Windows = append(zi.Windows, HourWindow{Start: sl.Start, End: sl.End})
-				}
-				if len(slots) == 1 {
-					zi.ScheduleIndex = slots[0].Index
-					zi.StartHour, zi.EndHour = slots[0].Start, slots[0].End
-				}
+		zi.Slots = sortedSlots(uses[id])
+		// A discovered zone keeps the window this save stored. An undiscovered
+		// one takes the windows of the slots its groups use it at: one window
+		// when those agree, several when the zone is shared at different times
+		// of day, and none when no source covers those slots.
+		if !zi.Discovered && len(zi.Windows) == 0 {
+			zi.Windows, zi.HourSource = useWindows(uses[id])
+			// One window for every slot that uses the zone: name it directly.
+			if len(zi.Windows) == 1 {
+				zi.StartHour, zi.EndHour = zi.Windows[0].Start, zi.Windows[0].End
+			}
+			// One slot too: that is the slot the zone is used at.
+			if len(uses[id]) == 1 {
+				zi.ScheduleIndex = uses[id][0].slot
 			}
 		}
 		out = append(out, *zi)
@@ -367,9 +389,9 @@ func (s *Save) speciesSchedule() speciesSchedules {
 	return out
 }
 
-// hourResolver answers what windows a zone type has, from the best source
-// available: an explicit option, this save, an earlier save, the published
-// table — in that order.
+// hourResolver answers which zones a group uses when, and what window each
+// timetable slot has, from the best source available: an explicit option, this
+// save, an earlier save, the published table — in that order.
 type hourResolver struct {
 	evidence scheduleEvidence
 	options  map[string][]ScheduleSlot
@@ -384,37 +406,6 @@ func (s *Save) newHourResolver() *hourResolver {
 	}
 }
 
-func (r *hourResolver) windows(reserveKey, speciesKey string, zoneType int32) ([]ScheduleSlot, string) {
-	if slots, ok := slotsForKey(r.options, reserveKey, speciesKey); ok {
-		if w := windowsOfType(slots, zoneType); len(w) > 0 {
-			return w, HourSourceOptions
-		}
-	}
-	if bySpecies, ok := r.evidence.byReserve[reserveKey]; ok {
-		if slots, ok := bySpecies[speciesKey]; ok {
-			if w := windowsOfType(slots, zoneType); len(w) > 0 {
-				return w, HourSourceSave
-			}
-		}
-	}
-	if slots, ok := r.evidence.bySpecies[speciesKey]; ok {
-		if w := windowsOfType(slots, zoneType); len(w) > 0 {
-			return w, HourSourceSave
-		}
-	}
-	if slots, ok := r.learned.hours(reserveKey, speciesKey); ok {
-		if w := windowsOfType(slots, zoneType); len(w) > 0 {
-			return w, HourSourceLearned
-		}
-	}
-	if slots, ok := PublishedZoneHoursFor(reserveKey, speciesKey); ok {
-		if w := windowsOfType(slots, zoneType); len(w) > 0 {
-			return w, HourSourceWiki
-		}
-	}
-	return nil, HourSourceNone
-}
-
 // slotsForKey looks an override up by reserve/species, then by species alone.
 func slotsForKey(m map[string][]ScheduleSlot, reserveKey, speciesKey string) ([]ScheduleSlot, bool) {
 	if len(m) == 0 {
@@ -427,16 +418,6 @@ func slotsForKey(m map[string][]ScheduleSlot, reserveKey, speciesKey string) ([]
 		return slots, true
 	}
 	return nil, false
-}
-
-func windowsOfType(slots []ScheduleSlot, zoneType int32) []ScheduleSlot {
-	var out []ScheduleSlot
-	for _, sl := range slots {
-		if sl.Type == zoneType {
-			out = append(out, sl)
-		}
-	}
-	return out
 }
 
 // learnZoneHours records this save's timetables in the schedule store so later

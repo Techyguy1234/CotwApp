@@ -104,9 +104,9 @@ func TestHourStoreRoundTrip(t *testing.T) {
 	}
 }
 
-// TestHourResolverPrecedence checks the source order: options, then this save,
-// then an earlier save, then the published table.
-func TestHourResolverPrecedence(t *testing.T) {
+// TestTimetablePrecedence checks the source order for slot windows: options,
+// then this save, then an earlier save, then the published table.
+func TestTimetablePrecedence(t *testing.T) {
 	store := newHourStore("v1")
 	store.learn("layton_lake_district", "moose", []ScheduleSlot{
 		{Index: 0, Type: 3, Start: 0, End: 4},
@@ -124,35 +124,40 @@ func TestHourResolverPrecedence(t *testing.T) {
 		learned: store,
 	}
 
-	// This save's own discovery wins for its reserve.
-	if slots, src := res.windows("yukon", "moose", 3); src != HourSourceSave || len(slots) != 1 || slots[0].Start != 2 {
-		t.Fatalf("reserve evidence: %v %q", slots, src)
+	// This save's own discovery wins for its reserve, slot by slot.
+	w, ok := tableAt(res.timetable("yukon", "moose"), 0)
+	if !ok || w.start != 2 || w.source != HourSourceSave {
+		t.Fatalf("reserve evidence: %+v %v", w, ok)
 	}
 	// The species-wide learned entry covers a reserve with no evidence of its own.
-	if slots, src := res.windows("hirschfelden", "moose", 1); src != HourSourceLearned || len(slots) != 1 || slots[0].Start != 4 {
-		t.Fatalf("learned species entry: %v %q", slots, src)
+	w, ok = tableAt(res.timetable("hirschfelden", "moose"), 1)
+	if !ok || w.start != 4 || w.source != HourSourceLearned {
+		t.Fatalf("learned species entry: %+v %v", w, ok)
 	}
-	// The published table fills a type the learned entry does not cover.
-	if slots, src := res.windows("hirschfelden", "snow_leopard", 1); src != HourSourceWiki || len(slots) == 0 {
-		t.Fatalf("published fallback: %v %q", slots, src)
+	// The published table fills a species neither the save nor the store covers.
+	w, ok = tableAt(res.timetable("hirschfelden", "snow_leopard"), 1)
+	if !ok || w.source != HourSourceWiki {
+		t.Fatalf("published fallback: %+v %v", w, ok)
 	}
-	// An explicit override beats everything else for undiscovered zones.
+	// An explicit override beats everything else for the slots it names.
 	res.options = map[string][]ScheduleSlot{
 		"hirschfelden/moose": {{Type: 1, Start: 6, End: 9}},
 	}
-	if slots, src := res.windows("hirschfelden", "moose", 1); src != HourSourceOptions || slots[0].Start != 6 {
-		t.Fatalf("override: %v %q", slots, src)
+	w, ok = tableAt(res.timetable("hirschfelden", "moose"), 0)
+	if !ok || w.start != 6 || w.source != HourSourceOptions {
+		t.Fatalf("override: %+v %v", w, ok)
 	}
 	// A species-wide override applies to every reserve, reserve evidence included.
 	res.options = map[string][]ScheduleSlot{
 		"moose": {{Type: 1, Start: 6, End: 9}},
 	}
-	if slots, src := res.windows("yukon", "moose", 1); src != HourSourceOptions || slots[0].Start != 6 {
-		t.Fatalf("override should win over learned evidence too: %v %q", slots, src)
+	w, ok = tableAt(res.timetable("yukon", "moose"), 0)
+	if !ok || w.start != 6 || w.source != HourSourceOptions {
+		t.Fatalf("override should win over learned evidence too: %+v %v", w, ok)
 	}
 	// Nothing to say for an unknown species.
-	if _, src := res.windows("yukon", "not_a_species", 1); src != HourSourceNone {
-		t.Fatalf("unknown species source = %q", src)
+	if got := res.timetable("yukon", "not_a_species"); len(got) != 0 {
+		t.Fatalf("unknown species timetable = %v", got)
 	}
 }
 
