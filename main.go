@@ -19,19 +19,41 @@ func main() {
 		panic(err)
 	}
 
+	gameIsLive := true
+
 	live, err := (*cotw.Game).OpenLive(&*save.GameData())
 	defer live.Close()
 	if err != nil {
-		panic(err)
+		gameIsLive = false
+	}
+	if gameIsLive {
+		if !live.Running() {
+			gameIsLive = false
+		}
 	}
 
-	gameIsLive := live.Running()
-
-	fmt.Println(save.Reserves[0].Species[0].Groups[0].NeedZones)
-
-	live.Close()
+	if !gameIsLive {
+		live.Close()
+	}
 
 	uiOptions := uiMode{}
+
+	showLiveAnimalPositions := false
+	if gameIsLive {
+		fmt.Println("Game Appears to be running...")
+		promptLiveAnimals := &survey.Confirm{
+			Message: "Do you want live animal positions on the map?",
+		}
+		err = survey.AskOne(promptLiveAnimals, &showLiveAnimalPositions)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	uiOptions.showLiveAnimalPositions = showLiveAnimalPositions
+
+	if !showLiveAnimalPositions && gameIsLive {
+		live.Close()
+	}
 
 	var reserveList []string
 	var reserveListIndices []int
@@ -44,28 +66,25 @@ func main() {
 	}
 
 	var promptReserveResult int
-	prompt := &survey.Select{
-		Message: "Select reserve:",
-		Options: reserveList,
-	}
-	err = survey.AskOne(prompt, &promptReserveResult)
-	if err != nil {
-		log.Fatal(err)
-	}
-	selectedReserve := reserveListIndices[promptReserveResult]
-
-	showLiveAnimalPositions := false
-	if gameIsLive {
-		fmt.Println("Game is running")
-		promptLiveAnimals := &survey.Confirm{
-			Message: "Do you want live animal positions on the map?",
-		}
-		err = survey.AskOne(promptLiveAnimals, &showLiveAnimalPositions)
+	var selectedReserve int
+	if showLiveAnimalPositions {
+		fmt.Println("Getting Game Status...")
+		liveGameStatus, err := live.Status()
 		if err != nil {
 			log.Fatal(err)
 		}
+		selectedReserve = liveGameStatus.ReserveIndex
+	} else {
+		prompt := &survey.Select{
+			Message: "Select reserve:",
+			Options: reserveList,
+		}
+		err = survey.AskOne(prompt, &promptReserveResult)
+		if err != nil {
+			log.Fatal(err)
+		}
+		selectedReserve = reserveListIndices[promptReserveResult]
 	}
-	uiOptions.showLiveAnimalPositions = showLiveAnimalPositions
 
 	var selectedReserveSpecies []string
 	for i := range save.Reserves[selectedReserve].Species {

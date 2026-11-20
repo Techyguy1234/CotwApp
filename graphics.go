@@ -264,6 +264,6 @@ func runLiveUpdateLoop(save cotw.Save, result *liveAnimalPositionsSafe) {
 		result.animals = positions
 		result.mutex.Unlock()
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(250 * time.Millisecond)
 	}
 }
