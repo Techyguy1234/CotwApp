@@ -19,10 +19,22 @@ func main() {
 		panic(err)
 	}
 
+	live, err := (*cotw.Game).OpenLive(&*save.GameData())
+	defer live.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	gameIsLive := live.Running()
+
+	fmt.Println(save.Reserves[0].Species[0].Groups[0].NeedZones)
+
+	live.Close()
+
 	uiOptions := uiMode{}
 
-	reserveList := []string{}
-	reserveListIndices := []int{}
+	var reserveList []string
+	var reserveListIndices []int
 
 	for i := range save.Reserves {
 		if save.Reserves[i].TotalAnimals != 0 {
@@ -36,13 +48,26 @@ func main() {
 		Message: "Select reserve:",
 		Options: reserveList,
 	}
-	err := survey.AskOne(prompt, &promptReserveResult)
+	err = survey.AskOne(prompt, &promptReserveResult)
 	if err != nil {
 		log.Fatal(err)
 	}
 	selectedReserve := reserveListIndices[promptReserveResult]
 
-	selectedReserveSpecies := []string{}
+	showLiveAnimalPositions := false
+	if gameIsLive {
+		fmt.Println("Game is running")
+		promptLiveAnimals := &survey.Confirm{
+			Message: "Do you want live animal positions on the map?",
+		}
+		err = survey.AskOne(promptLiveAnimals, &showLiveAnimalPositions)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	uiOptions.showLiveAnimalPositions = showLiveAnimalPositions
+
+	var selectedReserveSpecies []string
 	for i := range save.Reserves[selectedReserve].Species {
 		selectedReserveSpecies = append(selectedReserveSpecies, save.Reserves[selectedReserve].Species[i].SpeciesName)
 	}

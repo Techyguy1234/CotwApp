@@ -8,6 +8,8 @@ import (
 	_ "image/png"
 	"log"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2/vector"
 	_ "golang.org/x/image/webp"
@@ -15,6 +17,11 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 )
+
+type liveAnimalPositionsSafe struct {
+	mutex   sync.Mutex
+	animals []cotw.LiveAnimal
+}
 
 type needZoneIcon struct {
 	image     *ebiten.Image
@@ -31,9 +38,10 @@ type groupArrow struct {
 }
 
 type uiMode struct {
-	showSpecificSpecies bool
-	speciesName         string
-	showGroupArrows     bool
+	showSpecificSpecies     bool
+	speciesName             string
+	showGroupArrows         bool
+	showLiveAnimalPositions bool
 }
 
 var reserveImages = []string{
@@ -67,6 +75,7 @@ type Game struct {
 	zonesTransform   ebiten.GeoM
 	displayOptions   uiMode
 	shownGroupArrows []groupArrow
+	liveAnimals      *liveAnimalPositionsSafe
 }
 
 func (g *Game) Update() error {
@@ -103,7 +112,37 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	}
 
-	drawArrowBetweenMapPoints(camMatrix, g.zonesTransform, g.shownGroupArrows[0].startXY, g.shownGroupArrows[0].endXY, screen)
+	//drawArrowBetweenMapPoints(camMatrix, g.zonesTransform, g.shownGroupArrows[0].startXY, g.shownGroupArrows[0].endXY, screen)
+
+	//Live Animals
+	var unlockedPositions []cotw.LiveAnimal
+
+	g.liveAnimals.mutex.Lock()
+	unlockedPositions = make([]cotw.LiveAnimal, len(g.liveAnimals.animals))
+	copy(unlockedPositions, g.liveAnimals.animals)
+	g.liveAnimals.mutex.Unlock()
+
+	animalIcon, _, err := ebitenutil.NewImageFromFile("Images/Icons/AnimalLocationIcon.webp")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	bounds := animalIcon.Bounds()
+	for _, animal := range unlockedPositions {
+		if g.displayOptions.showSpecificSpecies == true && animal.SpeciesName != g.displayOptions.speciesName {
+			continue
+		}
+
+		drawOps := &ebiten.DrawImageOptions{}
+		halfSize := vec2{float64(bounds.Dx()) / 2, float64(bounds.Dy()) / 2}
+		drawOps.GeoM.Translate(-halfSize.x, -halfSize.y)
+		drawOps.GeoM.Scale(0.1, 0.1)
+		drawOps.GeoM.Translate(animal.Position.X, animal.Position.Z)
+		drawOps.GeoM.Concat(g.zonesTransform)
+		drawOps.GeoM.Concat(camMatrix)
+
+		screen.DrawImage(animalIcon, drawOps)
+	}
 
 }
 
@@ -176,7 +215,13 @@ func runEBitEn(reserve int, save *cotw.Save, mode uiMode) {
 	}
 	ebiten.SetWindowTitle(windowTitle)
 
-	if err := ebiten.RunGame(&Game{reserveImg: bgImg, camera: NewCamera(), zones: &needZones, zonesTransform: getOffset(reserve), displayOptions: mode, shownGroupArrows: groupArrowList}); err != nil {
+	LivePositions := liveAnimalPositionsSafe{}
+
+	if mode.showLiveAnimalPositions == true {
+		go runLiveUpdateLoop(*save, &LivePositions)
+	}
+
+	if err := ebiten.RunGame(&Game{reserveImg: bgImg, camera: NewCamera(), zones: &needZones, zonesTransform: getOffset(reserve), displayOptions: mode, shownGroupArrows: groupArrowList, liveAnimals: &LivePositions}); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -199,4 +244,26 @@ func drawArrowBetweenMapPoints(cameraGeoM ebiten.GeoM, zonesGeoM ebiten.GeoM, ma
 	drawOp.ColorScale.ScaleWithColor(color.RGBA{R: 255, G: 0, B: 0, A: 255})
 
 	vector.StrokePath(screen, &pixelSpacePath, strokeOp, drawOp)
+}
+
+func runLiveUpdateLoop(save cotw.Save, result *liveAnimalPositionsSafe) {
+	fmt.Println("LiveUpdate loop started (May take a few minutes for animals to first show up on map)")
+	liveGame, err := (*cotw.Game).OpenLive(save.GameData())
+	defer liveGame.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for {
+		fmt.Println("Reading positions")
+		positions, err := liveGame.Positions()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		result.mutex.Lock()
+		result.animals = positions
+		result.mutex.Unlock()
+
+		time.Sleep(5 * time.Second)
+	}
 }

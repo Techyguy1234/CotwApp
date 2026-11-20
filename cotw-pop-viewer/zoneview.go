@@ -44,9 +44,9 @@ func windowsText(windows []HourWindow, start, end float64) string {
 	case 0:
 		return "hours unknown"
 	case 1:
-		return fmt.Sprintf("%02.0f:00-%02.0f:00", start, end)
+		return hourText(start) + "-" + hourText(end)
 	}
-	return fmt.Sprintf("%d windows (%02.0f:00 first)", len(windows), windows[0].Start)
+	return fmt.Sprintf("%d windows (%s first)", len(windows), hourText(windows[0].Start))
 }
 
 // ZoneInfo is one need zone of a reserve: discovered or not, with the geometry

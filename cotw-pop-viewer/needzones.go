@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 
 	"cotw-pop-viewer/adf"
 )
@@ -134,10 +133,13 @@ func (g *Game) speciesKeyForZoneHash(hash uint32) string {
 	return ""
 }
 
-// linkNeedZones attaches every discovered zone to the groups that reference it.
+// linkNeedZones records which groups use each discovered zone and marks the
+// reserve's zone records as found. It does not build the groups' own zone lists:
+// those are one entry per schedule slot (see fillGroupNeedZones), because a group
+// can use the same zone at two different slots of its day.
 //
-// Zone ids are not unique within a reserve (two entries can share one) and a
-// group can list the same id twice, so links are deduplicated.
+// Zone ids are not unique within a reserve (two entries can share one), so the
+// zone's Groups list is deduplicated but every matching record is linked.
 func linkNeedZones(r *Reserve) {
 	for _, z := range r.NeedZones {
 		z.Discovered = true
@@ -163,7 +165,6 @@ func linkNeedZones(r *Reserve) {
 				}
 				ref := GroupRef{SpeciesIndex: sp.Index, SpeciesKey: sp.SpeciesKey, GroupIndex: group.Index}
 				for _, zone := range matches {
-					group.NeedZones = append(group.NeedZones, zone)
 					// A group's species comes from its population entry and is
 					// better evidence than the zone's own species hash.
 					if zone.AnimalSpeciesKey == "" && sp.SpeciesKey != "" {
@@ -194,11 +195,20 @@ func NeedZoneFileExists(dir string) bool {
 	return err == nil && !info.IsDir()
 }
 
-// fillGroupNeedZones gives every group an entry for each zone it uses, including
-// the zones the player has not discovered. Those carry Discovered=false and take
-// their type and position from the shipped geometry; their window is filled in
-// afterwards by assignGroupSlots, which knows which schedule slot the group uses
-// each zone at (see GroupSlot).
+// fillGroupNeedZones gives every group one entry for every slot of its zone path,
+// including the zones the player has not discovered.
+//
+// The entries are one per path position, not one per distinct zone: a group that
+// returns to the same zone later in its day lists that zone again, at the slot it
+// returns in. Deduplicating here is what made a 7-slot group print 6 zones with
+// one window missing (the second slot overwrote the first), so the list is
+// built straight from NeedZoneGuids, in path order, and assignGroupSlots then
+// gives each entry the window of its own slot.
+//
+// A discovered zone's entry starts as a copy of the reserve's record, so that
+// two slots using one zone do not share windows; the copy carries that zone's
+// stored type, position and id. An undiscovered zone takes its type and position
+// from the geometry the game ships.
 func fillGroupNeedZones(save *Save) {
 	if save == nil || save.game == nil {
 		return
@@ -207,54 +217,58 @@ func fillGroupNeedZones(save *Save) {
 		if len(r.Species) == 0 {
 			continue
 		}
+		// A reserve can store two zones under one id; the first record is the
+		// one a group entry is copied from (ZoneInfo merges them by id anyway).
+		byID := make(map[uint32]*NeedZone, len(r.NeedZones))
+		for _, z := range r.NeedZones {
+			if _, ok := byID[z.IDU]; !ok {
+				byID[z.IDU] = z
+			}
+		}
 		for _, sp := range r.Species {
 			for _, g := range sp.Groups {
-				if g == nil || len(g.NeedZoneGuids) == 0 {
+				if g == nil {
 					continue
 				}
-				have := make(map[uint32]bool, len(g.NeedZoneGuids))
-				for _, z := range g.NeedZones {
-					have[z.IDU] = true
+				if len(g.NeedZoneGuids) == 0 {
+					g.NeedZones = nil
+					continue
 				}
 				var refX, refZ float64
 				haveRef := false
 				if g.SpawnArea != nil {
 					refX, refZ, haveRef = g.SpawnArea.Position.X, g.SpawnArea.Position.Z, true
 				}
+				ref := GroupRef{SpeciesIndex: sp.Index, SpeciesKey: sp.SpeciesKey, GroupIndex: g.Index}
+				zones := make([]*NeedZone, 0, len(g.NeedZoneGuids))
 				for _, guid := range g.NeedZoneGuids {
-					if guid == EmptyZoneID || have[guid] {
+					if guid == EmptyZoneID {
 						continue
 					}
-					have[guid] = true
 					z := &NeedZone{
 						ReserveIndex:      r.Index,
 						ID:                int32(guid),
 						IDU:               guid,
+						Slot:              -1,
 						AnimalSpeciesKey:  sp.SpeciesKey,
 						AnimalSpeciesName: sp.SpeciesName,
-						Groups: []GroupRef{{
-							SpeciesIndex: sp.Index,
-							SpeciesKey:   sp.SpeciesKey,
-							GroupIndex:   g.Index,
-						}},
 					}
-					if geom, ok := save.zoneGeometryFor(guid, refX, refZ, haveRef); ok {
+					if found := byID[guid]; found != nil {
+						copied := *found
+						copied.Slot = -1
+						copied.Windows = nil
+						copied.HourSource = ""
+						z = &copied
+					} else if geom, ok := save.zoneGeometryFor(guid, refX, refZ, haveRef); ok {
 						z.Type = geom.Type
 						z.Position = geom.Position
 					}
-					g.NeedZones = append(g.NeedZones, z)
-				}
-				// A discovered zone keeps the window the save stored for it.
-				// Zones the player has not found get their window from the
-				// slot the group uses them at; assignGroupSlots does that once
-				// every group's zone list exists.
-				for _, z := range g.NeedZones {
-					if z.Discovered && z.EndHour != z.StartHour {
-						z.Windows = []HourWindow{{Start: z.StartHour, End: z.EndHour}}
-						z.HourSource = HourSourceSave
+					if !containsGroupRef(z.Groups, ref) {
+						z.Groups = append(z.Groups, ref)
 					}
+					zones = append(zones, z)
 				}
-				sort.Slice(g.NeedZones, func(i, j int) bool { return g.NeedZones[i].IDU < g.NeedZones[j].IDU })
+				g.NeedZones = zones
 			}
 		}
 	}

@@ -61,7 +61,7 @@ type Group struct {
     Index int; SpawnAreaID int32; ID uint32
     NeedZoneGuids []uint32   // one zone per schedule slot, in slot order
     Animals       []*Animal
-    NeedZones     []*NeedZone // the ids that resolved to a zone entry
+    NeedZones     []*NeedZone // one entry per slot: the group's day, repeats included
     Slots         []GroupSlot // the group's day: slot -> zone + window
     SpawnArea     *ZoneGeometry // centre/extent of the group's spawn area
 }
@@ -286,16 +286,24 @@ for _, zi := range save.Zones(0) {   // every zone of the reserve, found or not
 }
 ```
 
-Two things worth knowing:
+A few things worth knowing:
 
-- **A group's `NeedZones` is complete.** Every id in `NeedZoneGuids` gets an
-  entry: the discovered ones come from `found_need_zones_adf` with
-  `Discovered=true`, the rest are filled from the shipped geometry
-  (`Discovered=false`) with the type, position and the window of the slot the
-  group uses the zone at. So
+- **A group's `NeedZones` is complete, one entry per slot.** Every id in
+  `NeedZoneGuids` gets an entry: the discovered ones come from
+  `found_need_zones_adf` with `Discovered=true`, the rest are filled from the
+  shipped geometry (`Discovered=false`) with the type, position and the window of
+  the slot the group uses the zone at. So
   `save.Reserves[i].Species[j].Groups[k].NeedZones` prints a real list even on a
   reserve you have never scouted, and both `NeedZone` and `ZoneInfo` render
   themselves for `fmt`.
+- **A repeated zone appears once per slot.** Many groups return to the same zone
+  later in their day (7,522 of 15,980 groups on the reference save use one zone at
+  two slots), and the list keeps one entry per use, each with its own
+  `Slot`/window. Deduplicating by zone id would list a 7-slot group as 6 zones and
+  lose the earlier window - the second slot overwrote the first. Read a group's day
+  from `NeedZones` in order, or from `Slots`, which is the same thing keyed by slot
+  index; a zone's own record under `Reserve.NeedZones` stays one per file entry and
+  keeps the window the save recorded.
 - **Zone ids are not unique across reserves.** About 5,800 ids appear in more
   than one reserve's layout at genuinely different places. `save.Zones` resolves
   those by picking the candidate nearest the spawn areas of the groups that use

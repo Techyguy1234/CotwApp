@@ -326,8 +326,12 @@ func (s *Save) assignGroupSlots() {
 	}
 }
 
-// assignGroupSlots fills one group's Slots and the windows of the zones the
-// player has not found.
+// assignGroupSlots fills one group's Slots and gives each of the group's zone
+// entries the window of the slot it uses that zone at.
+//
+// The zone entries are parallel to the path (fillGroupNeedZones builds one per
+// position, repeats included), so they are consumed in path order: the same zone
+// used at two slots yields two entries, each showing its own window.
 func assignGroupSlots(table []slotWindow, slots []int8, g *Group) {
 	if g == nil || len(g.NeedZoneGuids) == 0 {
 		if g != nil {
@@ -335,9 +339,19 @@ func assignGroupSlots(table []slotWindow, slots []int8, g *Group) {
 		}
 		return
 	}
-	byID := make(map[uint32]*NeedZone, len(g.NeedZones))
+	// Entries per id, in path order, so a repeated id hands out its own copy to
+	// each of its slots.
+	queue := make(map[uint32][]*NeedZone, len(g.NeedZones))
 	for _, z := range g.NeedZones {
-		byID[z.IDU] = z
+		queue[z.IDU] = append(queue[z.IDU], z)
+	}
+	take := func(id uint32) *NeedZone {
+		q := queue[id]
+		if len(q) == 0 {
+			return nil
+		}
+		queue[id] = q[1:]
+		return q[0]
 	}
 	out := make([]GroupSlot, 0, len(g.NeedZoneGuids))
 	for pos, id := range g.NeedZoneGuids {
@@ -346,7 +360,7 @@ func assignGroupSlots(table []slotWindow, slots []int8, g *Group) {
 			gs.Slot = slots[pos]
 		}
 		if id != EmptyZoneID {
-			z := byID[id]
+			z := take(id)
 			if z != nil {
 				gs.Type = z.Type
 				gs.Discovered = z.Discovered
@@ -355,6 +369,12 @@ func assignGroupSlots(table []slotWindow, slots []int8, g *Group) {
 				}
 			}
 			if gs.Slot >= 0 {
+				// The slot is placed even when no source supplies its window:
+				// the entry then shows where in the day the group uses the zone
+				// with the hours left unknown.
+				if z != nil {
+					z.Slot, z.ScheduleIndex = gs.Slot, gs.Slot
+				}
 				if w, ok := tableAt(table, gs.Slot); ok {
 					gs.HasWindow = true
 					gs.StartHour, gs.EndHour, gs.HourSource = w.start, w.end, w.source
@@ -364,8 +384,10 @@ func assignGroupSlots(table []slotWindow, slots []int8, g *Group) {
 					// recorded for the zone itself is the best there is.
 					gs.HasWindow = true
 					gs.StartHour, gs.EndHour = gs.RecordedStartHour, gs.RecordedEndHour
-					gs.HourSource = HourSourceSave
+					applyRecordedWindow(z)
 				}
+			} else {
+				applyRecordedWindow(z)
 			}
 		}
 		out = append(out, gs)
@@ -377,19 +399,43 @@ func assignGroupSlots(table []slotWindow, slots []int8, g *Group) {
 		return out[i].Slot < out[j].Slot
 	})
 	g.Slots = out
+	// Keep the zone list in the order the day happens, so printing a group reads
+	// as its timetable. Entries no source could place go last.
+	sort.SliceStable(g.NeedZones, func(i, j int) bool {
+		a, b := g.NeedZones[i].Slot, g.NeedZones[j].Slot
+		if (a < 0) != (b < 0) {
+			return b < 0
+		}
+		if a < 0 {
+			return false
+		}
+		return a < b
+	})
 }
 
-// applySlotWindow fills the window of a zone entry the player has not found. A
-// discovered entry keeps what the save stored: that is the engine's own record
-// of the zone, written when the player found it, and for a zone several groups
-// share it names the slot of the group that discovered it, which can differ from
-// the slot this group uses it at (GroupSlot.RecordedStartHour).
+// applySlotWindow gives one zone entry the window of the slot the group uses it
+// at.
+//
+// It applies to discovered and undiscovered entries alike: the stored window of a
+// discovered zone is the slot during which the player found it, which for a zone
+// several groups share can be another group's slot, so for this group's entry the
+// group's own slot wins. The save's stored record is untouched on
+// Reserve.NeedZones, and GroupSlot.RecordedStartHour keeps it beside the slot.
 func applySlotWindow(z *NeedZone, w slotWindow) {
-	if z == nil || z.Discovered {
+	if z == nil {
 		return
 	}
-	z.ScheduleIndex = w.slot
 	z.StartHour, z.EndHour = w.start, w.end
 	z.Windows = []HourWindow{{Start: w.start, End: w.end}}
 	z.HourSource = w.source
+}
+
+// applyRecordedWindow is the fallback for an entry whose slot no timetable
+// covers: a discovered zone keeps the window the save stored for it.
+func applyRecordedWindow(z *NeedZone) {
+	if z == nil || !z.Discovered || z.EndHour == z.StartHour {
+		return
+	}
+	z.Windows = []HourWindow{{Start: z.StartHour, End: z.EndHour}}
+	z.HourSource = HourSourceSave
 }

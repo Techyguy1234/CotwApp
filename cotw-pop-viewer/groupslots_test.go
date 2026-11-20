@@ -305,3 +305,164 @@ func groupSlotOf(save *Save, reserveIndex int, id uint32) (int8, bool) {
 	}
 	return 0, false
 }
+
+// TestGroupZonesCoverEverySlot is the regression test for a group that returns to
+// the same zone later in its day: that zone must appear once per slot it is used
+// at, each entry carrying its own slot's window, so a 7-slot group lists seven
+// zones instead of collapsing to six and losing the earlier window.
+func TestGroupZonesCoverEverySlot(t *testing.T) {
+	saveDir, opts := integrationOptions(t)
+	opts.DisableScheduleLearning = true // keep the test from touching the cache
+	save, err := ParseSave(saveDir, opts)
+	if err != nil {
+		t.Fatalf("ParseSave: %v", err)
+	}
+	groups, repeated, entries := 0, 0, 0
+	for _, r := range save.Reserves {
+		for _, sp := range r.Species {
+			for _, g := range sp.Groups {
+				want := 0
+				uses := map[uint32]int{}
+				for _, id := range g.NeedZoneGuids {
+					if id == EmptyZoneID {
+						continue
+					}
+					want++
+					uses[id]++
+				}
+				if want == 0 {
+					continue
+				}
+				groups++
+				entries += want
+				if len(g.NeedZones) != want {
+					t.Errorf("%s %s group %d: %d zone entries for a %d-slot path (%v)",
+						r.Key, sp.SpeciesKey, g.Index, len(g.NeedZones), want, g.NeedZoneGuids)
+					continue
+				}
+				// The entries must cover the path id for id, repeats included.
+				have := map[uint32]int{}
+				for _, z := range g.NeedZones {
+					have[z.IDU]++
+				}
+				for id, n := range uses {
+					if have[id] != n {
+						t.Errorf("%s %s group %d: zone 0x%08x appears %d times in the path but %d in the list",
+							r.Key, sp.SpeciesKey, g.Index, id, n, have[id])
+					}
+					if n > 1 {
+						repeated++
+					}
+				}
+				// Every slot the group has a window for must name a zone entry
+				// carrying exactly that window, and a repeated zone's entries must
+				// be at different slots.
+				bySlot := map[int8]*NeedZone{}
+				for _, z := range g.NeedZones {
+					if z.Slot < 0 {
+						continue
+					}
+					if prev, ok := bySlot[z.Slot]; ok && prev.IDU != z.IDU {
+						t.Errorf("%s group %d: slot %d claimed by zones 0x%08x and 0x%08x",
+							r.Key, g.Index, z.Slot, prev.IDU, z.IDU)
+					}
+					bySlot[z.Slot] = z
+				}
+				for _, gs := range g.Slots {
+					if gs.Slot < 0 || gs.ZoneID == EmptyZoneID {
+						continue
+					}
+					z := bySlot[gs.Slot]
+					if z == nil {
+						// A slot no source supplies hours for is placed on the
+						// group but carries no window, so there is nothing to
+						// match its entry against.
+						if gs.HasWindow {
+							t.Errorf("%s %s group %d: slot %d has no zone entry", r.Key, sp.SpeciesKey, g.Index, gs.Slot)
+						}
+						continue
+					}
+					if z.IDU != gs.ZoneID {
+						t.Errorf("%s %s group %d: slot %d names zone 0x%08x, the entry says 0x%08x",
+							r.Key, sp.SpeciesKey, g.Index, gs.Slot, gs.ZoneID, z.IDU)
+					}
+					if !gs.HasWindow {
+						continue
+					}
+					if len(z.Windows) != 1 || z.Windows[0].Start != gs.StartHour || z.Windows[0].End != gs.EndHour {
+						t.Errorf("%s %s group %d: slot %d window %g-%g, entry has %v",
+							r.Key, sp.SpeciesKey, g.Index, gs.Slot, gs.StartHour, gs.EndHour, z.Windows)
+					}
+					if z.StartHour != gs.StartHour || z.EndHour != gs.EndHour {
+						t.Errorf("%s %s group %d: slot %d window %g-%g, entry's StartHour/EndHour %g-%g",
+							r.Key, sp.SpeciesKey, g.Index, gs.Slot, gs.StartHour, gs.EndHour, z.StartHour, z.EndHour)
+					}
+				}
+			}
+		}
+	}
+	if groups == 0 {
+		t.Skip("no groups in this save")
+	}
+	t.Logf("%d zone entries over %d groups; %d groups reuse a zone at two slots", entries, groups, repeated)
+	if repeated == 0 {
+		t.Skip("this save has no group that returns to a zone")
+	}
+}
+
+// TestWildBoarCoversItsSevenSlots pins the species the missing-slot report named:
+// a wild boar group's zone list must hold all seven slots of the published
+// Hirschfelden timetable, feeding 03:00-06:00 and 21:00-00:00 included even when
+// both use one zone.
+func TestWildBoarCoversItsSevenSlots(t *testing.T) {
+	saveDir, opts := integrationOptions(t)
+	opts.DisableScheduleLearning = true // keep the test from touching the cache
+	save, err := ParseSave(saveDir, opts)
+	if err != nil {
+		t.Fatalf("ParseSave: %v", err)
+	}
+	want := [][2]float64{{0, 3}, {3, 6}, {6, 10}, {10, 14}, {14, 17}, {17, 21}, {21, 24}}
+	for _, r := range save.Reserves {
+		if r.Key != "hirschfelden" {
+			continue
+		}
+		table := save.Timetable(r.Index, "wild_boar")
+		if len(table) != len(want) {
+			t.Fatalf("hirschfelden wild boar timetable has %d slots, want %d", len(table), len(want))
+		}
+		for i, sl := range table {
+			if sl.Start != want[i][0] || sl.End != want[i][1] {
+				t.Errorf("slot %d: %g-%g, want %g-%g", sl.Index, sl.Start, sl.End, want[i][0], want[i][1])
+			}
+		}
+		groups := 0
+		for _, sp := range r.Species {
+			if sp.SpeciesKey != "wild_boar" {
+				continue
+			}
+			for _, g := range sp.Groups {
+				if len(g.NeedZoneGuids) != len(want) {
+					continue
+				}
+				groups++
+				got := map[[2]float64]bool{}
+				for _, z := range g.NeedZones {
+					if len(z.Windows) == 1 {
+						got[[2]float64{z.Windows[0].Start, z.Windows[0].End}] = true
+					}
+				}
+				for _, w := range want {
+					if !got[w] {
+						t.Fatalf("wild boar group %d: no zone entry in %g-%g (entries: %d)", g.Index, w[0], w[1], len(g.NeedZones))
+					}
+				}
+			}
+		}
+		t.Logf("%d seven-slot wild boar groups cover every slot", groups)
+		if groups == 0 {
+			t.Skip("no seven-slot wild boar group on Hirschfelden")
+		}
+		return
+	}
+	t.Skip("Hirschfelden is not in this save")
+}
